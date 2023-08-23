@@ -49,3 +49,5 @@ module 'elki-libsvm', 'addons/libsvm'
 module 'elki-tutorial', 'addons/tutorial'
 // Fat-jar bundle
 module 'elki-bundle', 'addons/bundle'
+include 'elki-moVMF'
+
