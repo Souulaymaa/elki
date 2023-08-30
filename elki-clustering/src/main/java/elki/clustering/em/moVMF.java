@@ -63,7 +63,6 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param input the data input
      * @param init
      * @param ranState random State
-     * @param posteriorT hard or soft movmf
      * @param maxIter maximum number of iterations
      * @return
      */
@@ -72,7 +71,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
     public static double[][] train (int numClusters, double[] fWeights,
                                     boolean check, NumberVector[] input, String init, long ranState,
-                                    String posteriorT, double tolerance, int maxIter) {
+                                    double tolerance, int maxIter) {
 
         //start by initialising the centers using a helping method
         int nExamples = input.length;
@@ -103,7 +102,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
             NumberVector[] centersPrev = centers.clone();
 
             // Expectation step
-            posterior = expectation(input, centers, sWeights, kappas, posteriorT);
+            posterior = expectation(input, centers, sWeights, kappas);
 
             // Maximization step
             double[][] result = maximization(input, posterior, fWeights);
@@ -193,14 +192,13 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param centers
      * @param weights
      * @param concentrations
-     * @param posterior
      * @return
      */
     private static double[][] expectation(NumberVector[] arr, NumberVector[] centers, double[] weights,
-                                          double[] concentrations, String posterior){
+                                          double[] concentrations){
         int nExamples = arr.length; // the input
         int clusters = centers.length; // centers determine how many clusters there are
-        double[][] posteriorT = new double[nExamples][clusters];
+        double[][] posterior = new double[nExamples][clusters];
 
         for(int ee = 0; ee < nExamples; ee++){
             NumberVector x = arr[ee];
@@ -215,16 +213,16 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
             for(int cc = 0; cc < clusters; cc++){
                 double weight = Math.exp(logprob[cc]-maxLogprob);
-                posteriorT[ee][cc] = weight;
+                posterior[ee][cc] = weight;
                 sumLogprob += weight;
             }
 
             double norm = 1.0 / sumLogprob;
             for(int cc = 0; cc < clusters; cc++){
-                posteriorT[ee][cc] *=norm;
+                posterior[ee][cc] *=norm;
             }
         }
-        return posteriorT;
+        return posterior;
     }
 
     /**
