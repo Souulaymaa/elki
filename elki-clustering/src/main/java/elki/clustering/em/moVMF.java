@@ -1,14 +1,10 @@
 package elki.clustering.em;
 
-import java.util.Arrays;
-import java.util.Random;
-
 import elki.clustering.ClusteringAlgorithm;
-import elki.clustering.em.models.EMClusterModelFactory;
-import elki.clustering.em.models.MultivariateGaussianModelFactory;
 import elki.clustering.kmeans.initialization.KMeansInitialization;
 import elki.clustering.kmeans.initialization.RandomlyChosen;
 import elki.data.Clustering;
+import elki.data.DoubleVector;
 import elki.data.NumberVector;
 import elki.data.model.MeanModel;
 import elki.data.model.Model;
@@ -25,30 +21,38 @@ import elki.utilities.optionhandling.parameters.DoubleParameter;
 import elki.utilities.optionhandling.parameters.Flag;
 import elki.utilities.optionhandling.parameters.IntParameter;
 import elki.utilities.optionhandling.parameters.ObjectParameter;
-
+import org.apache.commons.math3.special.BesselJ;
+import java.util.Arrays;
+import java.util.Random;
 
 
 public class moVMF<V extends NumberVector, M extends Model> implements ClusteringAlgorithm<Clustering<M>>{
 
-          /**
+    /**
    * Class to choose the initial means
    */
-  protected KMeansInitialization initializer;
+    protected KMeansInitialization initializer;
 
-  protected NumberVectorDistance<? super V> distance = CosineDistance.STATIC;
+    protected NumberVectorDistance<? super V> distance = CosineDistance.STATIC;
 
     private int k;
     private int maxIterations;
+    private int minIter;
+    //private int dimension;
 
     /**
      * Constructor
      * @param k number of components
      * @param maxIterations maximum number of iterations
+     * @param minIter minimum number of Iterations
+     * @param soft decides if it's a soft or hard clustering
      */
 
-    public moVMF(int k, int d, int minIter, int maxIterations, double delta, boolean soft, KMeansInitialization initializer){
+    public moVMF(int k, int minIter, int maxIterations, double delta, boolean soft, KMeansInitialization initializer){
         this.k = k;
         this.maxIterations = maxIterations;
+        this.minIter = minIter;
+        this.initializer = initializer;
     }
 
     /**
@@ -67,13 +71,13 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
     //method too long, will split it for more efficiency
 
     public static double[][] train (int numClusters, double[] fWeights,
-                                    boolean check, double[][] input, String init, long ranState,
+                                    boolean check, NumberVector[] input, String init, long ranState,
                                     String posteriorT, double tolerance, int maxIter) {
 
         //start by initialising the centers using a helping method
         int nExamples = input.length;
-        int nFeatures = input[0].length;
-        double[][] centers = initUnitCenters(input, numClusters, init, ranState); //helping method
+        int nFeatures = input[0].getDimensionality();
+        NumberVector[] centers = initUnitCenters(input, numClusters, init, ranState); //helping method
 
         //initialise the probabilities alpha
         double[] sWeights;
@@ -96,7 +100,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         double[][] posterior = new double[0][];
         double[] newCenters = new double[0];
         for (int iter = 0; iter < maxIter; iter++) {
-            double[][] centersPrev = centers.clone();
+            NumberVector[] centersPrev = centers.clone();
 
             // Expectation step
             posterior = expectation(input, centers, sWeights, kappas, posteriorT);
@@ -139,23 +143,22 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @return
      */
 
-    private static double[][] initUnitCenters(double[][] arr, int nClusters, String init, long ranState){
+    private static NumberVector[] initUnitCenters(NumberVector[] arr, int nClusters, String init, long ranState){
         Random random = new Random(ranState);
         int nExamples = arr.length;
-        int features = arr[0].length;
+        int features = arr[0].getDimensionality();
 
-        double[][] centers;
-
+        NumberVector[] centers = new NumberVector[nClusters];
 
         switch (init) {
             case "spherical-k-means":
                 // TODO: Implement spherical-k-means initialization
+                // exists in elki
                 throw new UnsupportedOperationException("Spherical k-means initialization is not implemented yet");
 
             case "random":
-                centers = new double[nClusters][features];
                 for (int cc = 0; cc < nClusters; cc++) {
-                    randomUnitNormVector(random, centers[cc]);
+                    randomUnitNormVector(random, centers[cc].toArray());
                 }
                 break;
 
@@ -163,19 +166,9 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
                 // TODO: Implement k-means++ initialization
                 throw new UnsupportedOperationException("K-means++ initialization is not implemented yet");
 
-            case "random-orthonormal":
-                centers = new double[nClusters][features];
-                double[][] randomData = new double[features][features];
-                //TODO randomOrthonormalVectors(random, randomData);
-                for (int cc = 0; cc < nClusters; cc++) {
-                    System.arraycopy(randomData[cc], 0, centers[cc], 0, features);
-                }
-                break;
-
             case "random-class":
-                centers = new double[nClusters][features];
                 for (int cc = 0; cc < nClusters; cc++) {
-                    while (squaredNorm(centers[cc]) == 0.0) {
+                    while (squaredNorm(centers[cc].toArray()) == 0.0) {
                         int[] labels = new int[nExamples];
                         random.ints(0, nClusters).limit(nExamples).toArray(labels);
 
@@ -203,18 +196,18 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param posterior
      * @return
      */
-    private static double[][] expectation(double[][] arr, double[][] centers, double[] weights,
+    private static double[][] expectation(NumberVector[] arr, NumberVector[] centers, double[] weights,
                                           double[] concentrations, String posterior){
-        int nExamples = arr.length;
+        int nExamples = arr.length; // the input
         int clusters = centers.length; // centers determine how many clusters there are
         double[][] posteriorT = new double[nExamples][clusters];
 
         for(int ee = 0; ee < nExamples; ee++){
-            double[] x = arr[ee];
+            NumberVector x = arr[ee];
             double[] logprob = new double[clusters];
 
             for(int cc = 0; cc < clusters; cc++ ){
-                logprob[cc] = Math.log(weights[cc]) + concentrationLogpdf(x, centers[cc], concentrations[cc]);
+                logprob[cc] = Math.log(weights[cc]) + vonMisesFisherLogPDF(x, centers[cc], concentrations[cc], x.getDimensionality());
 
             }
             double maxLogprob = Arrays.stream(logprob).max().orElse(0.0);
@@ -241,25 +234,25 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param forceWeights
      * @return
      */
-    private static double[][] maximization(double[][] arr, double[][] posterior, double [] forceWeights){
+    private static double[][] maximization(NumberVector[] arr, double[][] posterior, double [] forceWeights){
         int nExamples = arr.length;
-        int features = arr[0].length;
+        int features = arr[0].getDimensionality();
         int clusters = posterior[0].length; // The posterior matrix from the expectation step.
-        double[][] centers = new double[clusters][features];
+        NumberVector[] centers = new NumberVector[clusters];
         double[] weights = new double[clusters];
         double[] concentrations = new double[clusters];
 
         for (int cc = 0; cc < clusters; cc++) {
             double weightsSum = 0.0;
-            double[] weightedSum = new double[features];
-            double[] weightedDotSum = new double[features];
+            double[] weightedSum = new double[arr[0].getDimensionality()];
+            double[] weightedDotSum = new double[arr[0].getDimensionality()];
             double concentrationSum = 0.0;
 
             for(int ee = 0; ee <nExamples; ee++){
                 double weight = posterior[ee][cc];
                 weightsSum += weight;
-                addVectorsInPlace(weightedSum, arr[ee], weight);
-                addVectorsInPlace(weightedDotSum, multiplyVectors(arr[ee], arr[ee]), weight);
+                addVectorsInPlace(toNumberVector(weightedSum), arr[ee], weight);
+                addVectorsInPlace(toNumberVector(weightedDotSum), multiplyVectors(arr[ee], arr[ee]), weight);
                 concentrationSum += weight * dotProduct(arr[ee], arr[ee]);
             }
             weights[cc] = forceWeights != null ? forceWeights[cc] : weightsSum / nExamples;
@@ -274,7 +267,12 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
             System.arraycopy(weightedSum, 0, centers[cc], 0, features);
         }
 
-        return new double[][] {centers, weights, concentrations };
+        return new NumberVector[] {centers, toNumberVector(weights), toNumberVector(concentrations)};
+    }
+
+
+    public static NumberVector toNumberVector(double[] array){
+        return new DoubleVector(array);
     }
 
     /**
@@ -283,22 +281,11 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param y the second vector
      * @param fac the factor
      */
-    private static void addVectorsInPlace(double[] x, double[] y, double fac){
-        for(int i = 0; i < x.length; i++){
-            x[i] += fac * y[i];
+    private static void addVectorsInPlace(NumberVector x, NumberVector y, double fac){
+        double result = 0.0;
+        for(int i = 0; i < x.getDimensionality(); i++){
+            result += x.doubleValue(i) + (fac * y.doubleValue(i));
         }
-    }
-
-    /**
-     *
-     * @param x
-     * @param center
-     * @param concentration
-     * @return
-     */
-    private static double concentrationLogpdf(double[] x, double[] center, double concentration){
-        //TODO implement the method as to calculate the logpdf
-        return 0.0;
     }
 
     /**
@@ -308,14 +295,13 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @return dot product of the two values
      */
 
-    private static double dotProduct( double[] x, double[] y){
-        double dot = 0.0;
-        for(int i = 0; i < x.length; i++){
-            dot += x[i] * y[i];
+    public static double dotProduct(NumberVector x, NumberVector y) {
+        double result = 0.0;
+        for (int i = 0; i < x.getDimensionality(); i++) {
+            result += x.doubleValue(i) * y.doubleValue(i);
         }
-        return dot;
+        return result;
     }
-
     // argmax already exists in elki (to be used from there)
 
     /**
@@ -324,13 +310,14 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param y
      * @return
      */
-    private static double[] multiplyVectors(double[] x, double[] y){
-        int n = x.length;
-        double[] result = new double[n];
-        for (int i = 0; i < n; i++) {
-            result[i] = x[i] * y[i];
+    public static NumberVector multiplyVectors(NumberVector x, NumberVector y) {
+        int dimensionality = x.getDimensionality();
+        double[] resultArray = new double[dimensionality];
+
+        for (int i = 0; i < dimensionality; i++) {
+            resultArray[i] = x.doubleValue(i) * y.doubleValue(i);
         }
-        return result;
+        return new DoubleVector(resultArray);
     }
 
     /**
@@ -374,7 +361,8 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         }
     }
 
-    private static double squaredNorm(double[][] x, double[][] y) {
+    // ob alle 3 gebraucht werden?
+    private static double squaredNorm(NumberVector[] x, NumberVector[] y) {
         double sum = 0.0;
         for (int i = 0; i < x.length; i++) {
             sum += squaredNorm(x[i], y[i]);
@@ -382,11 +370,20 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         return sum;
     }
 
-    private static double squaredNorm(double[] x, double[] y) {
+    private static double squaredNorm(NumberVector x, NumberVector y) {
         double sum = 0.0;
-        for (int i = 0; i < x.length; i++) {
-            double diff = x[i] - y[i];
+        int dimensionality = x.getDimensionality();
+        for (int i = 0; i < dimensionality; i++) {
+            double diff = x.doubleValue(i) - y.doubleValue(i);
             sum += diff * diff;
+        }
+        return sum;
+    }
+
+    public static double squaredNorm(double[] array) {
+        double sum = 0.0;
+        for (double value : array) {
+            sum += value * value;
         }
         return sum;
     }
@@ -398,18 +395,33 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param labels
      * @return
      */
-    private static double inertiaFromLabels(double[][] X, double[][] centers, double[] labels) {
+    private static double inertiaFromLabels(NumberVector[] X, NumberVector[] centers, double[] labels) {
         double inertia = 0.0;
         for (int ee = 0; ee < X.length; ee++) {
-            double[] x = X[ee];
+            NumberVector x = X[ee];
             int label = (int) labels[ee];
-            double[] center = centers[label];
+            NumberVector center = centers[label];
             inertia += squaredNorm(x, center);
         }
         return inertia;
     }
 
-      /**
+    public static double vonMisesFisherLogPDF(NumberVector x, NumberVector mu, double kappa, int dimensionality) {
+        double dotProduct = dotProduct(mu, x);
+        double normalizationConstant = computeNormalizationConstant(kappa, dimensionality);
+        double logPDF = Math.log(normalizationConstant) + kappa * dotProduct;
+        return logPDF;
+    }
+
+    public static double computeNormalizationConstant(double kappa, int dimensionality) {
+        double modifiedBessel = BesselJ.value(dimensionality / 2 - 1, kappa);
+        return Math.pow(kappa, dimensionality / 2 - 1) / (Math.pow(2 * Math.PI, dimensionality / 2) * modifiedBessel);
+    }
+
+
+
+
+    /**
    * Performs the EM clustering algorithm on the given database.
    * <p>
    * Finally a hard clustering is provided where each clusters gets assigned the
@@ -420,7 +432,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
    * @param relation Relation
    * @return Clustering result
    */
-  public Clustering<M> run(Relation<O> relation) {
+  public Clustering<M> run(Relation<V> relation) {
     //TODO
     return null;
   }
@@ -432,7 +444,9 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
     }
 
 
-      /**
+
+
+    /**
    * Parameterization class.
    */
   public static class Par<V extends NumberVector, M extends MeanModel> implements Parameterizer {
@@ -521,7 +535,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
     @Override
     public moVMF<V, M> make() {
-      return new moVMF(k, k, miniter, maxiter, delta, soft, initializer);
+      return new moVMF(k, miniter, maxiter, delta, soft, initializer);
     }
   }
 }
