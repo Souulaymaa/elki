@@ -24,7 +24,6 @@ import elki.database.relation.MaterializedRelation;
 import elki.database.relation.Relation;
 import elki.distance.CosineDistance;
 import elki.distance.NumberVectorDistance;
-import elki.math.linearalgebra.VMath;
 import elki.result.Metadata;
 import elki.utilities.optionhandling.OptionID;
 import elki.utilities.optionhandling.Parameterizer;
@@ -76,12 +75,8 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
     /**
      * A method to train the model
-     * @param numClusters number of clusters
-     * @param fWeights given  alphas
-     * @param check check if the initialisation is complete
-     * @param input the data input
-     * @param init
-     * @param ranState random State
+     * @param relation the relation
+     * @param tolerance the tolerance
      * @param maxIter maximum number of iterations
      * @return
      */
@@ -125,85 +120,36 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         // fill result with clusters and models
         List<ModifiableDBIDs> hardClusters = new ArrayList<>(k);
         for(int i = 0; i < k; i++) {
-        hardClusters.add(DBIDUtil.newArray());
+            hardClusters.add(DBIDUtil.newArray());
         }
 
         // provide a hard clustering
         for(DBIDIter iditer = relation.iterDBIDs(); iditer.valid(); iditer.advance()) {
-        hardClusters.get(argmax(posterior.get(iditer))).add(iditer);
+            hardClusters.get(argmax(posterior.get(iditer))).add(iditer);
         }
         Clustering<MeanModel> result = new Clustering<>();
         Metadata.of(result).setLongName("EM Clustering");
+
         // provide models within the result
         for(int i = 0; i < k; i++) {
-        result.addToplevelCluster(new Cluster<>(hardClusters.get(i), new MeanModel(centers[i])));
+            result.addToplevelCluster(new Cluster<>(hardClusters.get(i), new MeanModel(centers[i])));
         }
         posterior.destroy();
         return result;
 
     }
 
-    /**
-     * helping method to initialise the centers depending on the variable unit
-     * @param arr array
-     * @param nClusters number of clusters
-     * @param init defines the initialisation type
-     * @param ranState the random state
-     * @return
-     */
-
-    // private static NumberVector[] initUnitCenters(NumberVector[] arr, int nClusters, String init, long ranState){
-    //     Random random = new Random(ranState);
-    //     int nExamples = arr.length;
-    //     int features = arr[0].getDimensionality();
-
-    //     NumberVector[] centers = new NumberVector[nClusters];
-
-    //     switch (init) {
-    //         case "spherical-k-means":
-    //             // TODO: Implement spherical-k-means initialization
-    //             // exists in elki
-    //             throw new UnsupportedOperationException("Spherical k-means initialization is not implemented yet");
-
-    //         case "random":
-    //             for (int cc = 0; cc < nClusters; cc++) {
-    //                 randomUnitNormVector(random, centers[cc].toArray());
-    //             }
-    //             break;
-
-    //         case "k-means++":
-    //             // TODO: Implement k-means++ initialization
-    //             throw new UnsupportedOperationException("K-means++ initialization is not implemented yet");
-
-    //         case "random-class":
-    //             for (int cc = 0; cc < nClusters; cc++) {
-    //                 while (squaredNorm(centers[cc].toArray()) == 0.0) {
-    //                     int[] labels = new int[nExamples];
-    //                     random.ints(0, nClusters).limit(nExamples).toArray(labels);
-
-    //                     for (int ee = 0; ee < nExamples; ee++) {
-    //                         addVectorsInPlace(centers[cc], arr[ee], labels[ee] == cc ? 1.0 : 0.0);
-    //                     }
-    //                 }
-    //             }
-    //             break;
-
-    //         default:
-    //             throw new IllegalArgumentException("Invalid init value: " + init);
-    //     }
-
-    //     return centers;
-    // }
-
 
     /**
      *
-     * @param arr
+     * @param relation the relation
      * @param centers
      * @param weights
      * @param concentrations
+     * @param posterior
      * @return
      */
+
     private double expectation(Relation<V> relation, double[][] centers, double[] weights, double[] concentrations, WritableDataStore<double[]> posterior){
         double emSum = 0.;
         for(DBIDIter iditer = relation.iterDBIDs(); iditer.valid(); iditer.advance()) {
@@ -229,9 +175,11 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
     /**
      *
-     * @param arr
+     * @param relation
      * @param posterior
+     * @param centers
      * @param forceWeights
+     * @param kappas
      * @return
      */
     private void maximization(Relation<V> relation, WritableDataStore<double[]> posterior, double centers[][], double [] forceWeights, double[] kappas){
@@ -255,11 +203,20 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
                     }
 
                     // Compute new Kappa
-                    newKappa += prob * dotProduct(arr[ee], arr[ee]); // TODO check calculation
+                    if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
+
+                        double circularMeans = 0.0;
+
+                        for (int l = 0; l < d; l++) {
+                            circularMeans += Math.pow(tmpmean[l], 2);
+                        }
+                        // Compute the new kappas
+                        double newKappas = circularMeans * (d / (1.0 - circularMeans));
+                        newKappa[i] = newKappas;
+                    }
+
                     System.arraycopy(tmpmean, 0, centers[i], 0, d);
                 }
-
-                
             }
         }
         for (int i = 0; i<k; i++){
@@ -275,36 +232,36 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         for(int i = 0; i < k; i++) {
         // MLE
             final double weight = wsum[i] / relation.size();
-            models.get(i).finalizeEStep(weight, prior);
+            //models.get(i).finalizeEStep(weight, prior);
         }
         // old
-        for (int cc = 0; cc < clusters; cc++) {
-            double weightsSum = 0.0;
-            double[] weightedSum = new double[arr[0].getDimensionality()];
-            double[] weightedDotSum = new double[arr[0].getDimensionality()];
-            double concentrationSum = 0.0;
+       // for (int cc = 0; cc < clusters; cc++) {
+        //    double weightsSum = 0.0;
+        //  double[] weightedSum = new double[arr[0].getDimensionality()];
+        //    double[] weightedDotSum = new double[arr[0].getDimensionality()];
+        // double concentrationSum = 0.0;
 
-            for(int ee = 0; ee <nExamples; ee++){
-                double weight = posterior[ee][cc];
-                weightsSum += weight;
-                addVectorsInPlace(toNumberVector(weightedSum), arr[ee], weight);
-                addVectorsInPlace(toNumberVector(weightedDotSum), multiplyVectors(arr[ee], arr[ee]), weight);
-                concentrationSum += weight * dotProduct(arr[ee], arr[ee]);
-            }
-            weights[cc] = forceWeights != null ? forceWeights[cc] : weightsSum / nExamples;
-            concentrations[cc] = concentrationSum / weightsSum;
+        //    for(int ee = 0; ee <nExamples; ee++){
+        //        double weight = posterior[ee][cc];
+        //        weightsSum += weight;
+        //      addVectorsInPlace(toNumberVector(weightedSum), arr[ee], weight);
+        //      addVectorsInPlace(toNumberVector(weightedDotSum), multiplyVectors(arr[ee], arr[ee]), weight);
+        //      concentrationSum += weight * dotProduct(arr[ee], arr[ee]);
+        //    }
+        //   weights[cc] = forceWeights != null ? forceWeights[cc] : weightsSum / nExamples;
+        //  concentrations[cc] = concentrationSum / weightsSum;
 
-            if (weightsSum != 0.0) {
-                multiplyVectorInPlace(weightedSum, 1.0 / weightsSum);
+//            if (weightsSum != 0.0) {
+        //              multiplyVectorInPlace(weightedSum, 1.0 / weightsSum);
             }
-            if (concentrationSum != 0.0) {
-                concentrations[cc] /= (features * weightsSum);
-            }
-            System.arraycopy(weightedSum, 0, centers[cc], 0, features);
-        }
+    //   if (concentrationSum != 0.0) {
+    //          concentrations[cc] /= (features * weightsSum);
+    //      }
+    //      System.arraycopy(weightedSum, 0, centers[cc], 0, features);
+    //  }
 
-        return new NumberVector[] {centers, toNumberVector(weights), toNumberVector(concentrations)};
-    }
+    //  return new NumberVector[] {centers, toNumberVector(weights), toNumberVector(concentrations)};
+    //}
 
 
     public static NumberVector toNumberVector(double[] array){
@@ -424,13 +381,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         return sum;
     }
 
-    /**
-     *
-     * @param X
-     * @param centers
-     * @param labels
-     * @return
-     */
+
     // private static double inertiaFromLabels(NumberVector[] X, NumberVector[] centers, double[] labels) {
     //     double inertia = 0.0;
     //     for (int ee = 0; ee < X.length; ee++) {
