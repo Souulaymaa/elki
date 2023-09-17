@@ -8,6 +8,7 @@ elki.clustering.dbscan.parallel.ParallelGeneralizedDBSCAN
 elki.clustering.dbscan.GriDBSCAN
 elki.clustering.dbscan.LSDBC
 elki.clustering.em.EM
+elki.clustering.em.MoVMF
 elki.clustering.em.KDTreeEM
 elki.clustering.em.BetulaGMM
 elki.clustering.em.BetulaGMMWeighted

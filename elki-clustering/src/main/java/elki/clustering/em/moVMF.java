@@ -14,16 +14,18 @@ import elki.data.model.EMModel;
 import elki.data.model.MeanModel;
 import elki.data.model.Model;
 import elki.data.type.TypeInformation;
+import elki.data.type.TypeUtil;
 import elki.database.datastore.DataStoreFactory;
 import elki.database.datastore.DataStoreUtil;
 import elki.database.datastore.WritableDataStore;
 import elki.database.ids.DBIDIter;
 import elki.database.ids.DBIDUtil;
 import elki.database.ids.ModifiableDBIDs;
-import elki.database.relation.MaterializedRelation;
 import elki.database.relation.Relation;
 import elki.distance.CosineDistance;
 import elki.distance.NumberVectorDistance;
+import elki.logging.Logging;
+import elki.logging.statistics.DoubleStatistic;
 import elki.result.Metadata;
 import elki.utilities.optionhandling.OptionID;
 import elki.utilities.optionhandling.Parameterizer;
@@ -34,15 +36,14 @@ import elki.utilities.optionhandling.parameters.Flag;
 import elki.utilities.optionhandling.parameters.IntParameter;
 import elki.utilities.optionhandling.parameters.ObjectParameter;
 import net.jafama.FastMath;
-
+//import elki.clustering.em.models.EMClusterModelFactory;
 import java.util.ArrayList;
-// import org.apache.commons.math3.special.BesselJ; TODO reenable
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
 
-public class moVMF<V extends NumberVector, M extends Model> implements ClusteringAlgorithm<Clustering<M>>{
+public class MoVMF<V extends NumberVector, M extends Model> implements ClusteringAlgorithm<Clustering<M>>{
 
     /**
    * Class to choose the initial means
@@ -50,6 +51,15 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
     protected KMeansInitialization initializer;
 
     protected NumberVectorDistance<? super V> distance = CosineDistance.STATIC;
+
+    /**
+     * The logger for this class.
+     */
+    private static final Logging LOG = Logging.getLogger(MoVMF.class);
+
+    //protected EMClusterModelFactory<? super V, M> mfactory;
+
+    //protected double prior = 0.;
 
     private int k;
     private int maxIterations;
@@ -65,12 +75,15 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param soft decides if it's a soft or hard clustering
      */
 
-    public moVMF(int k, int minIter, int maxIterations, double delta, boolean soft, KMeansInitialization initializer){
+    public MoVMF(int k, int minIter, int maxIterations, double delta, boolean soft, KMeansInitialization initializer){
+        super();
         this.k = k;
         this.maxIterations = maxIterations;
         this.minIter = minIter;
         this.initializer = initializer;
         this.delta = delta;
+        if(maxIterations == 0){ this.maxIterations = Integer.MAX_VALUE;}
+        //this.mfactory = mfactory;
     }
 
     /**
@@ -97,13 +110,19 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         double[] kappas = new double[k];
         Arrays.fill(kappas, 1.0);
 
-         WritableDataStore<double[]> posterior = DataStoreUtil.makeStorage(relation.getDBIDs(), DataStoreFactory.HINT_HOT | DataStoreFactory.HINT_SORTED, double[].class);
+        //List<? extends EMClusterModel<? super V, M>> models = mfactory.buildInitialModels(relation, k);
+        WritableDataStore<double[]> posterior = DataStoreUtil.makeStorage(relation.getDBIDs(), DataStoreFactory.HINT_HOT | DataStoreFactory.HINT_SORTED, double[].class);
+        System.out.print(posterior);
         double[] newCenters = new double[0];
         for (int iter = 0; iter < maxIter; iter++) {
             double[][] centersPrev = centers.clone(); //TODO vermutlich nicht möglich
 
             // Expectation step
-            expectation(relation, centers, sWeights, kappas, posterior);
+            double loglikelihood = expectation(relation, centers, sWeights, kappas, posterior);
+            DoubleStatistic likestat = new DoubleStatistic(this.getClass().getName() + ".loglikelihood");
+            LOG.statistics(likestat.setDouble(loglikelihood));
+
+            //expectation(relation, centers, sWeights, kappas, posterior);
 
             // Maximization step
             maximization(relation, posterior, centers, sWeights, kappas);
@@ -112,7 +131,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
             double tolcheck = squaredNorm(centersPrev, centers);
             if (tolcheck <= tolerance) {
                 System.out.printf("Converged at iteration %d: center shift %e within tolerance %e%n", iter, tolcheck, tolerance);
-                break;
+               //break;
             }
         }
 
@@ -123,10 +142,13 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
             hardClusters.add(DBIDUtil.newArray());
         }
 
+
         // provide a hard clustering
         for(DBIDIter iditer = relation.iterDBIDs(); iditer.valid(); iditer.advance()) {
             hardClusters.get(argmax(posterior.get(iditer))).add(iditer);
+
         }
+
         Clustering<MeanModel> result = new Clustering<>();
         Metadata.of(result).setLongName("EM Clustering");
 
@@ -188,6 +210,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
         double[] tmpmean = new double[d];
         double[] wsum = new double[k];
         double[] newKappa = new double[k];
+        double circularMeans = 0.0;
 
         for(DBIDIter iditer = relation.iterDBIDs(); iditer.valid(); iditer.advance()) {
             double[] clusterProbabilities = posterior.get(iditer);
@@ -204,8 +227,6 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
                     // Compute new Kappa
                     if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
-
-                        double circularMeans = 0.0;
 
                         for (int l = 0; l < d; l++) {
                             circularMeans += Math.pow(tmpmean[l], 2);
@@ -401,11 +422,86 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
     }
 
     public static double computeNormalizationConstant(double kappa, int dimensionality) {
-        double modifiedBessel = 0;//BesselJ.value(dimensionality / 2 - 1, kappa); TODO  enable
+        double modifiedBessel = computeModifiedBessel(dimensionality / 2 - 1, kappa);
         return Math.pow(kappa, dimensionality / 2 - 1) / (Math.pow(2 * Math.PI, dimensionality / 2) * modifiedBessel);
     }
 
+    public static double computeModifiedBessel(int order, double x)  {
 
+        final double ACC = 40.0;
+        final double BIGNO = 1.0e10;
+        final double BIGNI = 1.0e-10;
+        int j;
+        double bi, bim, bip, tox, ans;
+
+        if(order<0){return Double.NaN;}
+        if(order == 0){return bessi0(x);}
+        if(order == 1){return bessi1(x);}
+
+        if (x == 0.0) {
+            return 0.0;
+        } else {
+            tox = 2.0 / Math.abs(x);
+            bip = ans = 0.0;
+            bi = 1.0;
+            for (j = 2 * (order + (int) Math.sqrt(ACC * order)); j > 0; j--) {
+                bim = bip + j * tox * bi;
+                bip = bi;
+                bi = bim;
+                if (Math.abs(bi) > BIGNO) {
+                    ans *= BIGNI;
+                    bi *= BIGNI;
+                    bip *= BIGNI;
+                }
+                if (j == order) {
+                    ans = bip;
+                }
+            }
+            ans *= bessi0(x) / bi;
+            return (x < 0.0 && order % 2 == 1) ? -ans : ans;
+        }
+    }
+
+    public static double bessi0(double x) {
+        double ax, ans;
+        double y;
+
+        ax = Math.abs(x);
+        if (ax < 3.75) {
+            y = x / 3.75;
+            y = y * y;
+            ans = 1.0 + y * (3.5156229 + y * (3.0899424 + y * (1.2067492
+                    + y * (0.2659732 + y * (0.360768e-1 + y * 0.45813e-2)))));
+        } else {
+            y = 3.75 / ax;
+            ans = (Math.exp(ax) / Math.sqrt(ax)) * (0.39894228 + y * (0.1328592e-1
+                    + y * (0.225319e-2 + y * (-0.157565e-2 + y * (0.916281e-2
+                    + y * (-0.2057706e-1 + y * (0.2635537e-1 + y * (-0.1647633e-1
+                    + y * 0.392377e-2))))))));
+        }
+        return ans;
+    }
+
+    public static double bessi1(double x) {
+        double ax, ans;
+        double y;
+
+        ax = Math.abs(x);
+        if (ax < 3.75) {
+            y = x / 3.75;
+            y = y * y;
+            ans = ax * (0.5 + y * (0.87890594 + y * (0.51498869 + y * (0.15084934
+                    + y * (0.2658733e-1 + y * (0.301532e-2 + y * 0.32411e-3))))));
+        } else {
+            y = 3.75 / ax;
+            ans = 0.2282967e-1 + y * (-0.2895312e-1 + y * (0.1787654e-1
+                    - y * 0.420059e-2));
+            ans = 0.39894228 + y * (-0.3988024e-1 + y * (-0.362018e-2
+                    + y * (0.163801e-2 + y * (-0.1031555e-1 + y * ans))));
+            ans *= (Math.exp(ax) / Math.sqrt(ax));
+        }
+        return x < 0.0 ? -ans : ans;
+    }
 
 
     /**
@@ -428,8 +524,7 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
 
     @Override
     public TypeInformation[] getInputTypeRestriction() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'getInputTypeRestriction'");
+        return TypeUtil.array(distance.getInputTypeRestriction());
     }
 
 
@@ -500,6 +595,12 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
    */
   protected KMeansInitialization initializer;
 
+        /**
+         * Cluster model factory.
+         */
+        //protected EMClusterModelFactory<V, M> mfactory;
+
+
     @Override
     public void configure(Parameterization config) {
       new IntParameter(K_ID) //
@@ -523,8 +624,8 @@ public class moVMF<V extends NumberVector, M extends Model> implements Clusterin
     }
 
     @Override
-    public moVMF<V, M> make() {
-      return new moVMF(k, miniter, maxiter, delta, soft, initializer);
+    public MoVMF<V, M> make() {
+      return new MoVMF<>(k, miniter, maxiter, delta, soft, initializer);
     }
   }
 }
