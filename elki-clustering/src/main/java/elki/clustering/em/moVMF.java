@@ -219,11 +219,12 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
                 final double prob = clusterProbabilities[i];
                 if(prob > 1e-10) { 
                     wsum[i] += prob;
-                    final double f = prob / wsum[i]; // Do division only once
+                    final double f = prob / wsum[i]; // Do division only once (will always deliver 1 ?)
                     // Compute new means
-                    for(int l = 0; l < d; l++) {
-                        tmpmean[l] = centers[i][l] + (vec.doubleValue(i) - centers[i][l]) * f;
-                    }
+                    for(int l = 0; l < d; l++){
+                        for(int j = 0; j < d; j++) {
+                        tmpmean[l] = centers[j][l] + (vec.doubleValue(j) - centers[j][l]) * f;
+                    }}
 
                     // Compute new Kappa
                     if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
@@ -417,7 +418,7 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     public static double vonMisesFisherLogPDF(NumberVector x, double[] mu, double kappa, int dimensionality) {
         double dotProduct = dotProduct(mu, x);
         double normalizationConstant = computeNormalizationConstant(kappa, dimensionality);
-        double logPDF = Math.log(normalizationConstant) + kappa * dotProduct;
+        double logPDF = normalizationConstant * Math.exp( kappa * dotProduct) ;
         return logPDF;
     }
 
