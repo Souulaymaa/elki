@@ -46,8 +46,8 @@ import java.util.Random;
 public class MoVMF<V extends NumberVector, M extends Model> implements ClusteringAlgorithm<Clustering<M>>{
 
     /**
-   * Class to choose the initial means
-   */
+     * Class to choose the initial means
+     */
     protected KMeansInitialization initializer;
 
     protected NumberVectorDistance<? super V> distance = CosineDistance.STATIC;
@@ -131,7 +131,7 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
             double tolcheck = squaredNorm(centersPrev, centers);
             if (tolcheck <= tolerance) {
                 System.out.printf("Converged at iteration %d: center shift %e within tolerance %e%n", iter, tolcheck, tolerance);
-               //break;
+                //break;
             }
         }
 
@@ -179,7 +179,7 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
             double[] probs = posterior.get(iditer);
             probs = probs != null ? probs : new double[k];
             for(int i = 0; i < k; i++) {
-                double v = Math.log(weights[i]) + vonMisesFisherLogPDF(vec, centers[i], concentrations[i], vec.getDimensionality());
+                double v =  vonMisesFisherLogPDF(vec, centers[i], concentrations[i], vec.getDimensionality());
                 probs[i] = v;
             }
             final double logP = EM.logSumExp(probs);
@@ -207,7 +207,7 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     private void maximization(Relation<V> relation, WritableDataStore<double[]> posterior, double centers[][], double [] forceWeights, double[] kappas){
         int d = centers[0].length;
         clear(centers);
-        double[] tmpmean = new double[d];
+         double[] tmpmean = new double[d];
         double[] wsum = new double[k];
         double[] newKappa = new double[k];
         double circularMeans = 0.0;
@@ -217,14 +217,15 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
             V vec = relation.get(iditer);
             for(int i = 0; i < k; i++) {
                 final double prob = clusterProbabilities[i];
-                if(prob > 1e-10) { 
+                if(prob > 1e-10) {
                     wsum[i] += prob;
-                    final double f = prob / wsum[i]; // Do division only once (will always deliver 1 ?)
+                    final double f = prob ; // Do division only once (will always deliver 1 ?)
+                    //double[] tmpmean = new double[d];
                     // Compute new means
                     for(int l = 0; l < d; l++){
                         for(int j = 0; j < d; j++) {
-                        tmpmean[l] = centers[j][l] + (vec.doubleValue(j) - centers[j][l]) * f;
-                    }}
+                            tmpmean[l] = centers[l][j] + (vec.doubleValue(j) - centers[l][j]) * f;
+                        }}
 
                     // Compute new Kappa
                     if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
@@ -241,49 +242,26 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
                 }
             }
         }
-        for (int i = 0; i<k; i++){
+        for (int i = 0; i < k; i++) {
             forceWeights[i] = wsum[i] / relation.size();
-            kappas[i] = newKappa[i] /  wsum[i];
-            for (int j = 0; j<d; j++){
-                centers[i][j] = centers[i][j] / wsum[i];
+            kappas[i] = newKappa[i] / wsum[i];
+            double centerLength = 0.0;  // Initialize the length of the center vector
+            for (int j = 0; j < d; j++) {
+                centerLength += centers[i][j] * centers[i][j]; // Sum of squares of coordinates
             }
-            
+            centerLength = Math.sqrt(centerLength);  // Calculate the length
+            for (int j = 0; j < d; j++) {
+                centers[i][j] = centers[i][j] / centerLength;  // Normalize each coordinate
+            }
         }
         // ENDE
-        
+
         for(int i = 0; i < k; i++) {
-        // MLE
+            // MLE
             final double weight = wsum[i] / relation.size();
             //models.get(i).finalizeEStep(weight, prior);
         }
-        // old
-       // for (int cc = 0; cc < clusters; cc++) {
-        //    double weightsSum = 0.0;
-        //  double[] weightedSum = new double[arr[0].getDimensionality()];
-        //    double[] weightedDotSum = new double[arr[0].getDimensionality()];
-        // double concentrationSum = 0.0;
-
-        //    for(int ee = 0; ee <nExamples; ee++){
-        //        double weight = posterior[ee][cc];
-        //        weightsSum += weight;
-        //      addVectorsInPlace(toNumberVector(weightedSum), arr[ee], weight);
-        //      addVectorsInPlace(toNumberVector(weightedDotSum), multiplyVectors(arr[ee], arr[ee]), weight);
-        //      concentrationSum += weight * dotProduct(arr[ee], arr[ee]);
-        //    }
-        //   weights[cc] = forceWeights != null ? forceWeights[cc] : weightsSum / nExamples;
-        //  concentrations[cc] = concentrationSum / weightsSum;
-
-//            if (weightsSum != 0.0) {
-        //              multiplyVectorInPlace(weightedSum, 1.0 / weightsSum);
-            }
-    //   if (concentrationSum != 0.0) {
-    //          concentrations[cc] /= (features * weightsSum);
-    //      }
-    //      System.arraycopy(weightedSum, 0, centers[cc], 0, features);
-    //  }
-
-    //  return new NumberVector[] {centers, toNumberVector(weights), toNumberVector(concentrations)};
-    //}
+    }
 
 
     public static NumberVector toNumberVector(double[] array){
@@ -404,17 +382,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     }
 
 
-    // private static double inertiaFromLabels(NumberVector[] X, NumberVector[] centers, double[] labels) {
-    //     double inertia = 0.0;
-    //     for (int ee = 0; ee < X.length; ee++) {
-    //         NumberVector x = X[ee];
-    //         int label = (int) labels[ee];
-    //         NumberVector center = centers[label];
-    //         inertia += squaredNorm(x, center);
-    //     }
-    //     return inertia;
-    // }
-
     public static double vonMisesFisherLogPDF(NumberVector x, double[] mu, double kappa, int dimensionality) {
         double dotProduct = dotProduct(mu, x);
         double normalizationConstant = computeNormalizationConstant(kappa, dimensionality);
@@ -506,22 +473,22 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
 
 
     /**
-   * Performs the EM clustering algorithm on the given database.
-   * <p>
-   * Finally a hard clustering is provided where each clusters gets assigned the
-   * points exhibiting the highest probability to belong to this cluster. But
-   * still, the database objects hold associated the complete probability-vector
-   * for all models.
-   * 
-   * @param relation Relation
-   * @return Clustering result
-   */
-  public Clustering<MeanModel> run(Relation<V> relation) {
-    if(relation.size() == 0) {
-        throw new IllegalArgumentException("database empty: must contain elements");
+     * Performs the EM clustering algorithm on the given database.
+     * <p>
+     * Finally a hard clustering is provided where each clusters gets assigned the
+     * points exhibiting the highest probability to belong to this cluster. But
+     * still, the database objects hold associated the complete probability-vector
+     * for all models.
+     *
+     * @param relation Relation
+     * @return Clustering result
+     */
+    public Clustering<MeanModel> run(Relation<V> relation) {
+        if(relation.size() == 0) {
+            throw new IllegalArgumentException("database empty: must contain elements");
+        }
+        return train(relation, delta, maxIterations);
     }
-    return train(relation, delta, maxIterations);
-  }
 
     @Override
     public TypeInformation[] getInputTypeRestriction() {
@@ -532,69 +499,69 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
 
 
     /**
-   * Parameterization class.
-   */
-  public static class Par<V extends NumberVector, M extends Model> implements Parameterizer {
-    /**
-     * Parameter to specify the number of clusters to find.
+     * Parameterization class.
      */
-    public static final OptionID K_ID = new OptionID("vmf.k", "The number of clusters to find.");
+    public static class Par<V extends NumberVector, M extends Model> implements Parameterizer {
+        /**
+         * Parameter to specify the number of clusters to find.
+         */
+        public static final OptionID K_ID = new OptionID("vmf.k", "The number of clusters to find.");
 
-    /**
-     * Parameter to specify the termination criterion 
-     */
-    public static final OptionID DELTA_ID = new OptionID("mf.delta", //
-        "TODO");
+        /**
+         * Parameter to specify the termination criterion
+         */
+        public static final OptionID DELTA_ID = new OptionID("mf.delta", //
+                "TODO");
 
-    /**
-     * Parameter to specify a minimum number of iterations.
-     */
-    public static final OptionID MINITER_ID = new OptionID("vmf.miniter", "Minimum number of iterations.");
+        /**
+         * Parameter to specify a minimum number of iterations.
+         */
+        public static final OptionID MINITER_ID = new OptionID("vmf.miniter", "Minimum number of iterations.");
 
-    /**
-     * Parameter to specify the maximum number of iterations.
-     */
-    public static final OptionID MAXITER_ID = new OptionID("vmf.maxiter", "Maximum number of iterations.");
+        /**
+         * Parameter to specify the maximum number of iterations.
+         */
+        public static final OptionID MAXITER_ID = new OptionID("vmf.maxiter", "Maximum number of iterations.");
 
-    /**
-     * Parameter to specify the saving of soft assignments
-     */
-    public static final OptionID SOFT_ID = new OptionID("vmf.soft", "Retain soft assignment of clusters.");
+        /**
+         * Parameter to specify the saving of soft assignments
+         */
+        public static final OptionID SOFT_ID = new OptionID("vmf.soft", "Retain soft assignment of clusters.");
 
-      /**
-   * Parameter to specify the cluster center initialization.
-   */
-  static final OptionID INIT_ID = new OptionID("em.centers", "Method to choose the initial cluster centers.");
+        /**
+         * Parameter to specify the cluster center initialization.
+         */
+        static final OptionID INIT_ID = new OptionID("em.centers", "Method to choose the initial cluster centers.");
 
-    /**
-     * Number of clusters.
-     */
-    protected int k;
+        /**
+         * Number of clusters.
+         */
+        protected int k;
 
-    /**
-     * Stopping threshold
-     */
-    protected double delta;
+        /**
+         * Stopping threshold
+         */
+        protected double delta;
 
-    /**
-     * Minimum number of iterations.
-     */
-    protected int miniter = 1;
+        /**
+         * Minimum number of iterations.
+         */
+        protected int miniter = 1;
 
-    /**
-     * Maximum number of iterations.
-     */
-    protected int maxiter = -1;
+        /**
+         * Maximum number of iterations.
+         */
+        protected int maxiter = -1;
 
-    /**
-     * Retain soft assignments?
-     */
-    boolean soft = false;
+        /**
+         * Retain soft assignments?
+         */
+        boolean soft = false;
 
-      /**
-   * Class to choose the initial means
-   */
-  protected KMeansInitialization initializer;
+        /**
+         * Class to choose the initial means
+         */
+        protected KMeansInitialization initializer;
 
         /**
          * Cluster model factory.
@@ -602,32 +569,32 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         //protected EMClusterModelFactory<V, M> mfactory;
 
 
-    @Override
-    public void configure(Parameterization config) {
-      new IntParameter(K_ID) //
-          .addConstraint(CommonConstraints.GREATER_EQUAL_ONE_INT) //
-          .grab(config, x -> k = x);
-      new DoubleParameter(DELTA_ID, 1e-7)//
-          .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_DOUBLE) //
-          .grab(config, x -> delta = x);
-      new IntParameter(MINITER_ID)//
-          .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_INT) //
-          .setOptional(true) //
-          .grab(config, x -> miniter = x);
-      new IntParameter(MAXITER_ID)//
-          .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_INT) //
-          .setOptional(true) //
-          .grab(config, x -> maxiter = x);
-        new ObjectParameter<KMeansInitialization>(INIT_ID, KMeansInitialization.class, RandomlyChosen.class) //
-          .grab(config, x -> initializer = x);
-      new Flag(SOFT_ID) //
-          .grab(config, x -> soft = x);
-    }
+        @Override
+        public void configure(Parameterization config) {
+            new IntParameter(K_ID) //
+                    .addConstraint(CommonConstraints.GREATER_EQUAL_ONE_INT) //
+                    .grab(config, x -> k = x);
+            new DoubleParameter(DELTA_ID, 1e-7)//
+                    .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_DOUBLE) //
+                    .grab(config, x -> delta = x);
+            new IntParameter(MINITER_ID)//
+                    .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_INT) //
+                    .setOptional(true) //
+                    .grab(config, x -> miniter = x);
+            new IntParameter(MAXITER_ID)//
+                    .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_INT) //
+                    .setOptional(true) //
+                    .grab(config, x -> maxiter = x);
+            new ObjectParameter<KMeansInitialization>(INIT_ID, KMeansInitialization.class, RandomlyChosen.class) //
+                    .grab(config, x -> initializer = x);
+            new Flag(SOFT_ID) //
+                    .grab(config, x -> soft = x);
+        }
 
-    @Override
-    public MoVMF<V, M> make() {
-      return new MoVMF<>(k, miniter, maxiter, delta, soft, initializer);
+        @Override
+        public MoVMF<V, M> make() {
+            return new MoVMF<>(k, miniter, maxiter, delta, soft, initializer);
+        }
     }
-  }
 }
 
