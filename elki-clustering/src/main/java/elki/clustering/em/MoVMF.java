@@ -26,6 +26,7 @@ import elki.distance.CosineDistance;
 import elki.distance.NumberVectorDistance;
 import elki.logging.Logging;
 import elki.logging.statistics.DoubleStatistic;
+import elki.math.linearalgebra.VMath;
 import elki.result.Metadata;
 import elki.utilities.optionhandling.OptionID;
 import elki.utilities.optionhandling.Parameterizer;
@@ -113,7 +114,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         //List<? extends EMClusterModel<? super V, M>> models = mfactory.buildInitialModels(relation, k);
         WritableDataStore<double[]> posterior = DataStoreUtil.makeStorage(relation.getDBIDs(), DataStoreFactory.HINT_HOT | DataStoreFactory.HINT_SORTED, double[].class);
         System.out.print(posterior);
-        double[] newCenters = new double[0];
         for (int iter = 0; iter < maxIter; iter++) {
             double[][] centersPrev = centers.clone(); //TODO vermutlich nicht möglich
 
@@ -182,15 +182,18 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
                 double v =  vonMisesFisherLogPDF(vec, centers[i], concentrations[i], vec.getDimensionality());
                 probs[i] = v;
             }
-            final double logP = EM.logSumExp(probs);
+            double P = 0.;
+            for (int i = 0; i< k;i++){
+                P += probs[i];
+            }
             for(int i = 0; i < k; i++) {
-                probs[i] = FastMath.exp(probs[i] - logP);
+                probs[i] = probs[i] / P;
             }
             posterior.put(iditer, probs);
             // if(loglikelihoods != null) {
             //     loglikelihoods.put(iditer, logP);
             // }
-            emSum += logP;
+            emSum +=P;
         }
         return emSum / relation.size();
     }
@@ -207,7 +210,7 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     private void maximization(Relation<V> relation, WritableDataStore<double[]> posterior, double centers[][], double [] forceWeights, double[] kappas){
         int d = centers[0].length;
         clear(centers);
-         double[] tmpmean = new double[d];
+        //double[][] tmpmean = new double[k][d];
         double[] wsum = new double[k];
         double[] newKappa = new double[k];
         double circularMeans = 0.0;
@@ -219,46 +222,50 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
                 final double prob = clusterProbabilities[i];
                 if(prob > 1e-10) {
                     wsum[i] += prob;
-                    final double f = prob ; // Do division only once (will always deliver 1 ?)
+                    final double f = prob; // Do division only once (will always deliver 1 ?)
                     //double[] tmpmean = new double[d];
                     // Compute new means
-                    for(int l = 0; l < d; l++){
-                        for(int j = 0; j < d; j++) {
-                            tmpmean[l] = centers[l][j] + (vec.doubleValue(j) - centers[l][j]) * f;
-                        }}
-
-                    // Compute new Kappa
-                    if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
-
-                        for (int l = 0; l < d; l++) {
-                            circularMeans += Math.pow(tmpmean[l], 2);
-                        }
-                        // Compute the new kappas
-                        double newKappas = circularMeans * (d / (1.0 - circularMeans));
-                        newKappa[i] = newKappas;
+                    for(int j = 0; j < d; j++) {
+                        centers[i][j] += vec.doubleValue(j) * f;
                     }
 
-                    System.arraycopy(tmpmean, 0, centers[i], 0, d);
+                    // // Compute new Kappa
+                    // if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
+
+                    //     for (int l = 0; l < d; l++) {
+                    //         circularMeans += Math.pow(centers[i][l], 2);
+                    //     }
+                    //     // Compute the new kappas
+                    //     double newKappas = circularMeans * (d / (1.0 - circularMeans));
+                    //     newKappa[i] = newKappas;
+                    // }
+
+                    
                 }
             }
         }
-        for (int i = 0; i < k; i++) {
-            forceWeights[i] = wsum[i] / relation.size();
-            kappas[i] = newKappa[i] / wsum[i];
-            double centerLength = 0.0;  // Initialize the length of the center vector
-            for (int j = 0; j < d; j++) {
-                centerLength += centers[i][j] * centers[i][j]; // Sum of squares of coordinates
-            }
-            centerLength = Math.sqrt(centerLength);  // Calculate the length
-            for (int j = 0; j < d; j++) {
-                centers[i][j] = centers[i][j] / centerLength;  // Normalize each coordinate
-            }
+
+        for (int i = 0; i<k; i++){
+            //System.arraycopy(tmpmean[i], 0, centers[i], 0, d);
+            // Compute new Kappa
+            wsum[i] /= relation.size();
+            if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
+                for (int l = 0; l < d; l++) {
+                    circularMeans += Math.pow(centers[i][l], 2);
+                }
+                double r = Math.sqrt(circularMeans) / wsum[i];
+                // Compute the new kappas
+                double newKappas = (r  *d) - Math.pow(r, 3) / (1.0 - Math.pow(r,2));
+                newKappa[i] = newKappas;
+                kappas[i] = newKappa[i];
+            }  
+            VMath.normalizeEquals(centers[i]);
         }
         // ENDE
 
         for(int i = 0; i < k; i++) {
             // MLE
-            final double weight = wsum[i] / relation.size();
+            forceWeights[i] = wsum[i];
             //models.get(i).finalizeEStep(weight, prior);
         }
     }
@@ -583,7 +590,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
                     .grab(config, x -> miniter = x);
             new IntParameter(MAXITER_ID)//
                     .addConstraint(CommonConstraints.GREATER_EQUAL_ZERO_INT) //
-                    .setOptional(true) //
                     .grab(config, x -> maxiter = x);
             new ObjectParameter<KMeansInitialization>(INIT_ID, KMeansInitialization.class, RandomlyChosen.class) //
                     .grab(config, x -> initializer = x);
