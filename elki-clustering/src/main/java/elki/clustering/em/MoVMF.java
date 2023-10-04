@@ -10,6 +10,8 @@ import elki.data.Cluster;
 import elki.data.Clustering;
 import elki.data.DoubleVector;
 import elki.data.NumberVector;
+import elki.data.SparseNumberVector;
+import elki.data.VectorUtil;
 import elki.data.model.EMModel;
 import elki.data.model.MeanModel;
 import elki.data.model.Model;
@@ -37,7 +39,6 @@ import elki.utilities.optionhandling.parameters.Flag;
 import elki.utilities.optionhandling.parameters.IntParameter;
 import elki.utilities.optionhandling.parameters.ObjectParameter;
 import net.jafama.FastMath;
-//import elki.clustering.em.models.EMClusterModelFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -57,10 +58,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
      * The logger for this class.
      */
     private static final Logging LOG = Logging.getLogger(MoVMF.class);
-
-    //protected EMClusterModelFactory<? super V, M> mfactory;
-
-    //protected double prior = 0.;
 
     private int k;
     private int maxIterations;
@@ -84,7 +81,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         this.initializer = initializer;
         this.delta = delta;
         if(maxIterations == 0){ this.maxIterations = Integer.MAX_VALUE;}
-        //this.mfactory = mfactory;
     }
 
     /**
@@ -111,28 +107,24 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         double[] kappas = new double[k];
         Arrays.fill(kappas, 1.0);
 
-        //List<? extends EMClusterModel<? super V, M>> models = mfactory.buildInitialModels(relation, k);
         WritableDataStore<double[]> posterior = DataStoreUtil.makeStorage(relation.getDBIDs(), DataStoreFactory.HINT_HOT | DataStoreFactory.HINT_SORTED, double[].class);
         System.out.print(posterior);
+        double oldlikelihood = Double.NEGATIVE_INFINITY;
         for (int iter = 0; iter < maxIter; iter++) {
-            double[][] centersPrev = centers.clone(); //TODO vermutlich nicht möglich
-
             // Expectation step
             double loglikelihood = expectation(relation, centers, sWeights, kappas, posterior);
             DoubleStatistic likestat = new DoubleStatistic(this.getClass().getName() + ".loglikelihood");
             LOG.statistics(likestat.setDouble(loglikelihood));
 
-            //expectation(relation, centers, sWeights, kappas, posterior);
-
             // Maximization step
             maximization(relation, posterior, centers, sWeights, kappas);
 
-            // Check convergence
-            double tolcheck = squaredNorm(centersPrev, centers);
-            if (tolcheck <= tolerance) {
-                System.out.printf("Converged at iteration %d: center shift %e within tolerance %e%n", iter, tolcheck, tolerance);
-                //break;
+            double likediff = loglikelihood - oldlikelihood;
+            if ( iter > minIter &&  likediff <= tolerance) {
+                System.out.printf("Converged at iteration %d: changedlikelihood %e within tolerance %e%n", iter, likediff, tolerance);
+                break;
             }
+            oldlikelihood = loglikelihood;
         }
 
         // Compute labels
@@ -146,7 +138,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         // provide a hard clustering
         for(DBIDIter iditer = relation.iterDBIDs(); iditer.valid(); iditer.advance()) {
             hardClusters.get(argmax(posterior.get(iditer))).add(iditer);
-
         }
 
         Clustering<MeanModel> result = new Clustering<>();
@@ -178,21 +169,16 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
             V vec = relation.get(iditer);
             double[] probs = posterior.get(iditer);
             probs = probs != null ? probs : new double[k];
+            double P = 0.;
             for(int i = 0; i < k; i++) {
                 double v =  vonMisesFisherLogPDF(vec, centers[i], concentrations[i], vec.getDimensionality());
                 probs[i] = v;
-            }
-            double P = 0.;
-            for (int i = 0; i< k;i++){
-                P += probs[i];
+                P += v; //*  weights[i]
             }
             for(int i = 0; i < k; i++) {
-                probs[i] = probs[i] / P;
+                probs[i] = (probs[i]) / P; // TODO wsum?  * weights[i]
             }
             posterior.put(iditer, probs);
-            // if(loglikelihoods != null) {
-            //     loglikelihoods.put(iditer, logP);
-            // }
             emSum +=P;
         }
         return emSum / relation.size();
@@ -210,187 +196,53 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     private void maximization(Relation<V> relation, WritableDataStore<double[]> posterior, double centers[][], double [] forceWeights, double[] kappas){
         int d = centers[0].length;
         clear(centers);
-        //double[][] tmpmean = new double[k][d];
         double[] wsum = new double[k];
-        double[] newKappa = new double[k];
-        double circularMeans = 0.0;
 
         for(DBIDIter iditer = relation.iterDBIDs(); iditer.valid(); iditer.advance()) {
             double[] clusterProbabilities = posterior.get(iditer);
             V vec = relation.get(iditer);
             for(int i = 0; i < k; i++) {
                 final double prob = clusterProbabilities[i];
-                if(prob > 1e-10) {
+                if(prob > 0) {
                     wsum[i] += prob;
-                    final double f = prob; // Do division only once (will always deliver 1 ?)
-                    //double[] tmpmean = new double[d];
                     // Compute new means
-                    for(int j = 0; j < d; j++) {
-                        centers[i][j] += vec.doubleValue(j) * f;
-                    }
-
-                    // // Compute new Kappa
-                    // if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
-
-                    //     for (int l = 0; l < d; l++) {
-                    //         circularMeans += Math.pow(centers[i][l], 2);
-                    //     }
-                    //     // Compute the new kappas
-                    //     double newKappas = circularMeans * (d / (1.0 - circularMeans));
-                    //     newKappa[i] = newKappas;
-                    // }
-
-                    
+                    plusTimesIP(centers[i], vec, prob);
                 }
             }
         }
 
         for (int i = 0; i<k; i++){
-            //System.arraycopy(tmpmean[i], 0, centers[i], 0, d);
-            // Compute new Kappa
-            wsum[i] /= relation.size();
             if (wsum[i] > 0) { // Ensure that there are data points assigned to the cluster
+                double circularMeans = 0.0;
                 for (int l = 0; l < d; l++) {
                     circularMeans += Math.pow(centers[i][l], 2);
                 }
                 double r = Math.sqrt(circularMeans) / wsum[i];
                 // Compute the new kappas
-                double newKappas = (r  *d) - Math.pow(r, 3) / (1.0 - Math.pow(r,2));
-                newKappa[i] = newKappas;
-                kappas[i] = newKappa[i];
+                double newKappa = ((r*d) - Math.pow(r, 3)) / (1.0 - Math.pow(r,2));
+                kappas[i] = newKappa;
             }  
             VMath.normalizeEquals(centers[i]);
-        }
-        // ENDE
-
-        for(int i = 0; i < k; i++) {
-            // MLE
-            forceWeights[i] = wsum[i];
-            //models.get(i).finalizeEStep(weight, prior);
+            forceWeights[i] = wsum[i] /= relation.size();
         }
     }
 
-
-    public static NumberVector toNumberVector(double[] array){
-        return new DoubleVector(array);
-    }
-
-    /**
-     *
-     * @param x the first vector
-     * @param y the second vector
-     * @param fac the factor
-     */
-    private static void addVectorsInPlace(NumberVector x, NumberVector y, double fac){
-        double result = 0.0;
-        for(int i = 0; i < x.getDimensionality(); i++){
-            result += x.doubleValue(i) + (fac * y.doubleValue(i));
+    private void plusTimesIP(double[] sum, NumberVector vec, double s){
+        if(vec instanceof SparseNumberVector) {
+            SparseNumberVector svec = (SparseNumberVector) vec;
+            for(int j = svec.iter(); svec.iterValid(j); j = svec.iterAdvance(j)) {
+                sum[svec.iterDim(j)] += svec.iterDoubleValue(j) * s;
+            }
         }
-    }
-
-    /**
-     * private method to compute the dot product
-     * @param x first value
-     * @param y second value
-     * @return dot product of the two values
-     */
-
-    public static double dotProduct(double[] x, NumberVector y) {
-        double result = 0.0;
-        for (int i = 0; i < y.getDimensionality(); i++) {
-            result += x[i] * y.doubleValue(i);
-        }
-        return result;
-    }
-    // argmax already exists in elki (to be used from there)
-
-    /**
-     *
-     * @param x
-     * @param y
-     * @return
-     */
-    public static NumberVector multiplyVectors(NumberVector x, NumberVector y) {
-        int dimensionality = x.getDimensionality();
-        double[] resultArray = new double[dimensionality];
-
-        for (int i = 0; i < dimensionality; i++) {
-            resultArray[i] = x.doubleValue(i) * y.doubleValue(i);
-        }
-        return new DoubleVector(resultArray);
-    }
-
-    /**
-     *
-     * @param vector
-     * @param scalar
-     */
-    private static void multiplyVectorInPlace(double[] vector, double scalar) {
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] *= scalar;
-        }
-    }
-
-    /**
-     *
-     * @param random
-     * @param vector
-     */
-    private static void randomUnitNormVector(Random random, double[] vector) {
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = random.nextGaussian();
-        }
-        normalizeVector(vector);
-    }
-
-    /**
-     * method that normalizes a vector
-     * @param vector the vector to be normalized
-     */
-
-    private static void normalizeVector(double[]  vector){
-        double norm = 0.0;
-        for (double value : vector) {
-            norm += value * value;
-        }
-        norm = Math.sqrt(norm);
-        if (norm != 0.0) {
-            for (int i = 0; i < vector.length; i++) {
-                vector[i] /= norm;
+        else {
+            for(int j = 0; j < vec.getDimensionality(); j++) {
+                sum[j] += vec.doubleValue(j) * s;
             }
         }
     }
 
-    // ob alle 3 gebraucht werden?
-    private static double squaredNorm(double[][] x, double[][] y) {
-        double sum = 0.0;
-        for (int i = 0; i < x.length; i++) {
-            sum += squaredNorm(x[i], y[i]);
-        }
-        return sum;
-    }
-
-    private static double squaredNorm(double[] x, double[] y) {
-        double sum = 0.0;
-        int dimensionality = x.length;
-        for (int i = 0; i < dimensionality; i++) {
-            double diff = x[i] - y[i];
-            sum += diff * diff;
-        }
-        return sum;
-    }
-
-    public static double squaredNorm(double[] array) {
-        double sum = 0.0;
-        for (double value : array) {
-            sum += value * value;
-        }
-        return sum;
-    }
-
-
     public static double vonMisesFisherLogPDF(NumberVector x, double[] mu, double kappa, int dimensionality) {
-        double dotProduct = dotProduct(mu, x);
+        double dotProduct = VectorUtil.dot(x, mu);
         double normalizationConstant = computeNormalizationConstant(kappa, dimensionality);
         double logPDF = normalizationConstant * Math.exp( kappa * dotProduct) ;
         return logPDF;
@@ -477,7 +329,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         }
         return x < 0.0 ? -ans : ans;
     }
-
 
     /**
      * Performs the EM clustering algorithm on the given database.
@@ -569,12 +420,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
          * Class to choose the initial means
          */
         protected KMeansInitialization initializer;
-
-        /**
-         * Cluster model factory.
-         */
-        //protected EMClusterModelFactory<V, M> mfactory;
-
 
         @Override
         public void configure(Parameterization config) {
