@@ -24,6 +24,7 @@ import elki.database.ids.DBIDIter;
 import elki.database.ids.DBIDUtil;
 import elki.database.ids.ModifiableDBIDs;
 import elki.database.relation.Relation;
+import elki.database.relation.RelationUtil;
 import elki.distance.CosineDistance;
 import elki.distance.NumberVectorDistance;
 import elki.logging.Logging;
@@ -97,6 +98,13 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
 
         //start by initialising the centers using a helping method
         double[][] centers = initializer.chooseInitialMeans(relation, k, distance);
+
+        final int dim = RelationUtil.maxDimensionality(relation);
+        for(int i = 0; i < centers.length; i++) {
+            if(centers[i].length < dim) {
+            centers[i] = Arrays.copyOf(centers[i], dim);
+            }
+        }
 
         //initialise the probabilities alpha
         double[] sWeights;
