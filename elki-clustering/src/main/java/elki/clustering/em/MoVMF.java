@@ -3,16 +3,13 @@ package elki.clustering.em;
 import static elki.math.linearalgebra.VMath.*;
 
 import elki.clustering.ClusteringAlgorithm;
-import elki.clustering.em.models.EMClusterModel;
 import elki.clustering.kmeans.initialization.KMeansInitialization;
 import elki.clustering.kmeans.initialization.RandomlyChosen;
 import elki.data.Cluster;
 import elki.data.Clustering;
-import elki.data.DoubleVector;
 import elki.data.NumberVector;
 import elki.data.SparseNumberVector;
 import elki.data.VectorUtil;
-import elki.data.model.EMModel;
 import elki.data.model.MeanModel;
 import elki.data.model.Model;
 import elki.data.type.TypeInformation;
@@ -39,11 +36,10 @@ import elki.utilities.optionhandling.parameters.DoubleParameter;
 import elki.utilities.optionhandling.parameters.Flag;
 import elki.utilities.optionhandling.parameters.IntParameter;
 import elki.utilities.optionhandling.parameters.ObjectParameter;
-import net.jafama.FastMath;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Random;
+
 
 
 public class MoVMF<V extends NumberVector, M extends Model> implements ClusteringAlgorithm<Clustering<M>>{
@@ -64,7 +60,6 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     private int maxIterations;
     private int minIter;
     private double delta;
-    //private int dimension;
 
     /**
      * Constructor
@@ -89,10 +84,9 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
      * @param relation the relation
      * @param tolerance the tolerance
      * @param maxIter maximum number of iterations
-     * @return
+     * @return the clustering result
      */
 
-    //method too long, will split it for more efficiency
 
     public Clustering<MeanModel> train (Relation<V> relation, double tolerance, int maxIter) {
 
@@ -162,13 +156,12 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
 
 
     /**
-     *
+     * Perform the Expectation Step of the EM algorithm
      * @param relation the relation
-     * @param centers
-     * @param weights
-     * @param concentrations
-     * @param posterior
-     * @return
+     * @param centers cluster centers
+     * @param weights the weights
+     * @param concentrations the concentrations kappas
+     * @param posterior the posterior
      */
 
     private double expectation(Relation<V> relation, double[][] centers, double[] weights, double[] concentrations, WritableDataStore<double[]> posterior){
@@ -193,13 +186,12 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
     }
 
     /**
-     *
-     * @param relation
-     * @param posterior
-     * @param centers
-     * @param forceWeights
-     * @param kappas
-     * @return
+     * Perform the Maximization step of the EM algorithm
+     * @param relation the relation
+     * @param posterior the posterior
+     * @param centers the cluster centers
+     * @param forceWeights the weights
+     * @param kappas the concentrations
      */
     private void maximization(Relation<V> relation, WritableDataStore<double[]> posterior, double centers[][], double [] forceWeights, double[] kappas){
         int d = centers[0].length;
@@ -235,6 +227,13 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         }
     }
 
+    /**
+     * Multiplicate  a vector vec by a scalar s and accumulate the results in the sum array
+     * @param sum the sum array
+     * @param vec a vector
+     * @param s a scalar
+     */
+
     private void plusTimesIP(double[] sum, NumberVector vec, double s){
         if(vec instanceof SparseNumberVector) {
             SparseNumberVector svec = (SparseNumberVector) vec;
@@ -249,6 +248,14 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         }
     }
 
+    /**
+     * Calculate the probability density function
+     * @param x the data point
+     * @param mu the center
+     * @param kappa the concentration
+     * @param dimensionality the dimensionality
+     * @return the calculated pdf
+     */
     public static double vonMisesFisherLogPDF(NumberVector x, double[] mu, double kappa, int dimensionality) {
         double dotProduct = VectorUtil.dot(x, mu);
         double normalizationConstant = computeNormalizationConstant(kappa, dimensionality);
@@ -256,10 +263,25 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         return logPDF;
     }
 
+    /**
+     * Calculate the normalization constant cd
+     * @param kappa the concentration
+     * @param dimensionality the dimensionality
+     * @return the cd
+     */
+
     public static double computeNormalizationConstant(double kappa, int dimensionality) {
         double modifiedBessel = computeModifiedBessel(dimensionality / 2 - 1, kappa);
         return Math.pow(kappa, dimensionality / 2 - 1) / (Math.pow(2 * Math.PI, dimensionality / 2) * modifiedBessel);
     }
+
+    /**
+     * Calculate the modified bessel function based on the c implementation by M.G.R Vogelaar published by the University of
+     * Groningen
+     * @param order the order
+     * @param x the data point
+     * @return the calculated modified Bessel function
+     */
 
     public static double computeModifiedBessel(int order, double x)  {
 
@@ -297,6 +319,12 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         }
     }
 
+    /**
+     * Calculate Calculate the modified bessel function of order 0
+     * @param x data point
+     * @return the calculated modified Bessel function of order 0
+     */
+
     public static double bessi0(double x) {
         double ax, ans;
         double y;
@@ -316,6 +344,12 @@ public class MoVMF<V extends NumberVector, M extends Model> implements Clusterin
         }
         return ans;
     }
+
+    /**
+     * Calculate Calculate the modified bessel function of order 1
+     * @param x data point
+     * @return the calculated modified Bessel function of order 1
+     */
 
     public static double bessi1(double x) {
         double ax, ans;
